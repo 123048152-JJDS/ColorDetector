@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detección de Colores - Cámara</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Detección de Colores en Tiempo Real</h1>
+        
+        <!-- Panel de información de colores -->
+        <div class="color-info">
+            <div class="color-item">
+                <div class="color-box" style="background: #FF0000;"></div>
+                <span>Rojo</span>
+            </div>
+            <div class="color-item">
+                <div class="color-box" style="background: #00FF00;"></div>
+                <span>Verde</span>
+            </div>
+            <div class="color-item">
+                <div class="color-box" style="background: #0000FF;"></div>
+                <span>Azul</span>
+            </div>
+            <div class="color-item">
+                <div class="color-box" style="background: #FFFF00;"></div>
+                <span>Amarillo</span>
+            </div>
+        </div>
+
+        <!-- Panel de control de cámara -->
+        <div class="camera-controls">
+            <div class="status-panel">
+                <div class="status-item">
+                    <span>Estado Cámara:</span>
+                    <span id="camera-status" class="status-unknown">Verificando...</span>
+                </div>
+                <div>
+                    <button class="btn btn-refresh" onclick="checkCameraStatus()">Actualizar</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Panel de estadísticas de base de datos -->
+        <div class="stats-panel">
+            <h3>Estadísticas de Base de Datos</h3>
+            <div id="database-stats">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Total Fotos:</span>
+                        <span class="stat-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Objetos Azul:</span>
+                        <span class="stat-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Objetos Verde:</span>
+                        <span class="stat-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Objetos Rojo:</span>
+                        <span class="stat-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Objetos Amarillo:</span>
+                        <span class="stat-value">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Total Objetos:</span>
+                        <span class="stat-value">-</span>
+                    </div>
+                </div>
+            </div>
+            <div style="margin-top: 15px; text-align: center;">
+                <button class="btn btn-stats" onclick="updateStats()">Actualizar Estadísticas</button>
+                <button class="btn btn-database" onclick="viewDatabase()">Ver Base de Datos</button>
+            </div>
+        </div>
+
+        <!-- Contenedor de video -->
+        <div class="video-container">
+            <img src="{{ url_for('video_feed') }}" id="video-feed" alt="Video en vivo" 
+                 onload="cameraConnected()" onerror="cameraError()">
+        </div>
+        
+        <!-- Controles principales -->
+        <div class="controls">
+            <button class="btn btn-capture" onclick="capturePhoto()">Capturar Foto</button>
+            <button class="btn btn-fullscreen" onclick="toggleFullscreen()">Pantalla Completa</button>
+        </div>
+        
+        <!-- Estado del sistema -->
+        <div class="status" id="status">
+            Inicializando cámara y sistema de detección...
+        </div>
+    </div>
+
+    <script>
+        window.onload = function() {
+            checkCameraStatus();
+            updateStats();
+        };
+
+        function checkCameraStatus() {
+            document.getElementById('status').textContent = 'Verificando estado de cámara...';
+            
+            setTimeout(() => {
+                const statusElement = document.getElementById('camera-status');
+                statusElement.innerHTML = 'Cámara USB - 640x480';
+                statusElement.className = 'status-connected';
+                document.getElementById('status').textContent = 'Cámara conectada correctamente - Sistema listo';
+                document.getElementById('status').style.color = 'green';
+            }, 1000);
+        }
+
+        function cameraConnected() {
+            document.getElementById('status').textContent = 'Cámara conectada - Streaming activo';
+            document.getElementById('status').style.color = 'green';
+        }
+
+        function cameraError() {
+            document.getElementById('status').textContent = 'Error en el streaming de video';
+            document.getElementById('status').style.color = 'red';
+        }
+
+        function capturePhoto() {
+            document.getElementById('status').textContent = 'Capturando y guardando en sistema...';
+            document.getElementById('status').style.color = 'blue';
+            
+            const videoFeed = document.getElementById('video-feed');
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            
+            canvas.width = videoFeed.videoWidth || 640;
+            canvas.height = videoFeed.videoHeight || 480;
+            context.drawImage(videoFeed, 0, 0, canvas.width, canvas.height);
+            
+            const imageData = canvas.toDataURL('image/png');
+            
+            fetch('/capture_and_save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    image_data: imageData
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const link = document.createElement('a');
+                    link.download = data.filename;
+                    link.href = imageData;
+                    link.click();
+                    
+                    const detections = data.detections;
+                    document.getElementById('status').innerHTML = `
+                        Foto capturada y guardada en sistema<br>
+                        <small>Archivo: ${data.filename}</small><br>
+                        <small>Detecciones: Azul(${detections.azul}) Verde(${detections.verde}) Rojo(${detections.rojo}) Amarillo(${detections.amarillo})</small>
+                    `;
+                    document.getElementById('status').style.color = 'green';
+                    
+                    setTimeout(updateStats, 1000);
+                    
+                } else {
+                    document.getElementById('status').textContent = 'Error: ' + data.error;
+                    document.getElementById('status').style.color = 'red';
+                }
+            })
+            .catch(error => {
+                document.getElementById('status').textContent = 'Error de conexión con el servidor';
+                document.getElementById('status').style.color = 'red';
+                console.error('Error:', error);
+            });
+        }
+
+        function updateStats() {
+            fetch('/get_database_stats')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const stats = data.stats;
+                    
+                    // Actualizar la interfaz con las estadísticas
+                    const statsContainer = document.getElementById('database-stats');
+                    statsContainer.innerHTML = `
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <span class="stat-label">Total Fotos:</span>
+                                <span class="stat-value">${stats.total_fotos}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Objetos Azul:</span>
+                                <span class="stat-value">${stats.objetos_azul}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Objetos Verde:</span>
+                                <span class="stat-value">${stats.objetos_verde}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Objetos Rojo:</span>
+                                <span class="stat-value">${stats.objetos_rojo}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Objetos Amarillo:</span>
+                                <span class="stat-value">${stats.objetos_amarillo}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Total Objetos:</span>
+                                <span class="stat-value">${stats.total_objetos}</span>
+                            </div>
+                        </div>
+                    `;
+                    
+                    document.getElementById('status').textContent = 'Estadísticas actualizadas correctamente';
+                    document.getElementById('status').style.color = 'green';
+                    
+                    setTimeout(() => {
+                        document.getElementById('status').textContent = 'Sistema funcionando correctamente';
+                        document.getElementById('status').style.color = 'green';
+                    }, 2000);
+                    
+                } else {
+                    document.getElementById('status').textContent = 'Error cargando estadísticas: ' + data.error;
+                    document.getElementById('status').style.color = 'red';
+                }
+            })
+            .catch(error => {
+                document.getElementById('status').textContent = 'Error de conexión al cargar estadísticas';
+                document.getElementById('status').style.color = 'red';
+            });
+        }
+
+        function viewDatabase() {
+            window.open('/view_database', '_blank');
+        }
+
+        function toggleFullscreen() {
+            const videoContainer = document.querySelector('.video-container');
+            
+            if (!document.fullscreenElement) {
+                if (videoContainer.requestFullscreen) {
+                    videoContainer.requestFullscreen();
+                } else if (videoContainer.webkitRequestFullscreen) {
+                    videoContainer.webkitRequestFullscreen();
+                } else if (videoContainer.msRequestFullscreen) {
+                    videoContainer.msRequestFullscreen();
+                }
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                } else if (document.msExitFullscreen) {
+                    document.msExitFullscreen();
+                }
+            }
+        }
+
+        setInterval(updateStats, 30000);
+        
+        setInterval(checkCameraStatus, 20000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Base de Datos - Detección de Colores</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="navigation">
+            <a href="/" class="btn-back">Volver a Cámara en Vivo</a>
+            <div>
+                <button class="btn-db refresh" onclick="loadAllData()">Actualizar Todo</button>
+                <button class="btn-db" onclick="exportToCSV()">Exportar CSV</button>
+            </div>
+        </div>
+        
+        <h1>Base de Datos - Detección de Colores</h1>
+        
+        <!-- Estadísticas Generales -->
+        <div class="stats-panel">
+            <h3>Estadísticas Generales del Sistema</h3>
+            <div id="database-stats">
+                <div class="loading">Cargando estadísticas...</div>
+            </div>
+        </div>
+
+        <!-- Gestión de Fotos -->
+        <div class="data-section">
+            <h3>Fotos Guardadas en el Sistema</h3>
+            <div class="search-container">
+                <input type="text" id="search-fotos" class="search-input" placeholder="Buscar por nombre de archivo..." onkeyup="searchFotos()">
+                <button class="btn-db refresh" onclick="loadFotos()">Actualizar Fotos</button>
+            </div>
+            <div id="fotos-container">
+                <div class="loading">Cargando fotos desde la base de datos...</div>
+            </div>
+            <div id="fotos-pagination" class="pagination"></div>
+        </div>
+
+        <!-- Objetos Detectados -->
+        <div class="data-section">
+            <h3>Objetos Detectados por Color</h3>
+            <div class="objects-tabs">
+                <button class="btn-db azul" onclick="showObjects('azul')">Objetos Azules</button>
+                <button class="btn-db verde" onclick="showObjects('verde')">Objetos Verdes</button>
+                <button class="btn-db rojo" onclick="showObjects('rojo')">Objetos Rojos</button>
+                <button class="btn-db amarillo" onclick="showObjects('amarillo')">Objetos Amarillos</button>
+                <button class="btn-db" onclick="showAllObjects()">Todos los Objetos</button>
+            </div>
+            
+            <div class="search-container">
+                <input type="text" id="search-objects" class="search-input" placeholder="Buscar por ID de foto..." onkeyup="searchObjects()">
+                <select id="filter-area" onchange="filterByArea()">
+                    <option value="">Todos los tamaños</option>
+                    <option value="small">Pequeños (< 5000)</option>
+                    <option value="medium">Medianos (5000-15000)</option>
+                    <option value="large">Grandes (> 15000)</option>
+                </select>
+            </div>
+            
+            <div id="objects-container">
+                <div class="loading">Selecciona un color para ver los objetos detectados...</div>
+            </div>
+            <div id="objects-pagination" class="pagination"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentFotosPage = 1;
+        let currentObjectsPage = 1;
+        const itemsPerPage = 12; // Aumentamos a 12 para mejor distribución
+        let allFotos = [];
+        let allObjects = [];
+        let currentColor = '';
+
+        // Cargar datos al iniciar
+        window.onload = function() {
+            loadStats();
+            loadFotos();
+        };
+
+        // ===== FUNCIONES DE ESTADÍSTICAS =====
+        function loadStats() {
+            fetch('/get_database_stats')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const stats = data.stats;
+                    document.getElementById('database-stats').innerHTML = `
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <span class="stat-label">Total Fotos:</span>
+                                <span class="stat-value">${stats.total_fotos}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Objetos Azul:</span>
+                                <span class="stat-value">${stats.objetos_azul}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Objetos Verde:</span>
+                                <span class="stat-value">${stats.objetos_verde}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Objetos Rojo:</span>
+                                <span class="stat-value">${stats.objetos_rojo}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Objetos Amarillo:</span>
+                                <span class="stat-value">${stats.objetos_amarillo}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Total Objetos:</span>
+                                <span class="stat-value">${stats.total_objetos}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Tasa de Detección:</span>
+                                <span class="stat-value">${stats.total_fotos > 0 ? (stats.total_objetos / stats.total_fotos).toFixed(1) : '0'} obj/foto</span>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('database-stats').innerHTML = 
+                        '<div class="empty-state">Error cargando estadísticas: ' + data.error + '</div>';
+                }
+            })
+            .catch(error => {
+                document.getElementById('database-stats').innerHTML = 
+                    '<div class="empty-state">Error de conexión al servidor</div>';
+            });
+        }
+
+        // ===== FUNCIONES DE FOTOS =====
+        function loadFotos() {
+            document.getElementById('fotos-container').innerHTML = '<div class="loading">Cargando fotos desde base de datos...</div>';
+            
+            fetch('/get_db_recent_photos')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    allFotos = data.fotos;
+                    if (allFotos.length === 0) {
+                        displayFotos([]);
+                    } else {
+                        // Obtener conteo de objetos para cada foto
+                        loadObjectCounts().then(() => {
+                            displayFotos(allFotos);
+                        });
+                    }
+                } else {
+                    document.getElementById('fotos-container').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-icon">📷</div>
+                            <h3>Error cargando fotos</h3>
+                            <p>${data.error}</p>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                document.getElementById('fotos-container').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">❌</div>
+                        <h3>Error de conexión</h3>
+                        <p>No se pudo conectar al servidor</p>
+                    </div>
+                `;
+            });
+        }
+
+        function loadObjectCounts() {
+            return Promise.all(allFotos.map(foto => {
+                return fetch(`/get_db_photo_objects/${foto.id}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            foto.objetos_azul = data.objetos.azul || 0;
+                            foto.objetos_verde = data.objetos.verde || 0;
+                            foto.objetos_rojo = data.objetos.rojo || 0;
+                            foto.objetos_amarillo = data.objetos.amarillo || 0;
+                            foto.total_objetos = data.objetos.total || 0;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error cargando objetos para foto:', foto.id, error);
+                        // Valores por defecto en caso de error
+                        foto.objetos_azul = 0;
+                        foto.objetos_verde = 0;
+                        foto.objetos_rojo = 0;
+                        foto.objetos_amarillo = 0;
+                        foto.total_objetos = 0;
+                    });
+            }));
+        }
+
+        function displayFotos(fotos) {
+            if (fotos.length === 0) {
+                document.getElementById('fotos-container').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📷</div>
+                        <h3>No hay fotos guardadas</h3>
+                        <p>Captura algunas fotos desde la cámara principal para verlas aquí.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const startIndex = (currentFotosPage - 1) * itemsPerPage;
+            const paginatedFotos = fotos.slice(startIndex, startIndex + itemsPerPage);
+
+            let html = `
+                <div class="foto-grid">
+                    ${paginatedFotos.map(foto => `
+                        <div class="foto-card" onclick="viewFotoDetails(${foto.id})">
+                            <div class="foto-image-container">
+                                <img src="/photos/${foto.nombre}" 
+                                     alt="${foto.nombre}" 
+                                     class="photo-thumb"
+                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                <div class="foto-preview" style="display: none;">
+                                    <span class="preview-text">Imagen</span>
+                                </div>
+                            </div>
+                            <div class="foto-info-small">
+                                <strong class="foto-name">${foto.nombre}</strong>
+                                <div class="foto-details">
+                                    <span class="foto-date">${foto.fecha}</span>
+                                    <span class="foto-dimensions">${foto.ancho}x${foto.alto}</span>
+                                </div>
+                            </div>
+                            <div class="detection-count">
+                                <div class="count-item">
+                                    <span class="count-number azul">${foto.objetos_azul || 0}</span>
+                                    <span class="count-label">Azul</span>
+                                </div>
+                                <div class="count-item">
+                                    <span class="count-number verde">${foto.objetos_verde || 0}</span>
+                                    <span class="count-label">Verde</span>
+                                </div>
+                                <div class="count-item">
+                                    <span class="count-number rojo">${foto.objetos_rojo || 0}</span>
+                                    <span class="count-label">Rojo</span>
+                                </div>
+                                <div class="count-item">
+                                    <span class="count-number amarillo">${foto.objetos_amarillo || 0}</span>
+                                    <span class="count-label">Amarillo</span>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            document.getElementById('fotos-container').innerHTML = html;
+            setupPagination('fotos', fotos.length, currentFotosPage, 'fotos');
+        }
+
+        function searchFotos() {
+            const searchTerm = document.getElementById('search-fotos').value.toLowerCase();
+            const filtered = allFotos.filter(foto => 
+                foto.nombre.toLowerCase().includes(searchTerm) ||
+                foto.fecha.toLowerCase().includes(searchTerm)
+            );
+            currentFotosPage = 1;
+            displayFotos(filtered);
+        }
+
+        function viewFotoDetails(fotoId) {
+            // Cargar detalles completos de la foto
+            fetch(`/get_db_photo_details/${fotoId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const foto = data.foto;
+                        const objetos = data.objetos;
+                        
+                        let detallesHTML = `
+                            <h3>Detalles de la Foto: ${foto.nombre_archivo}</h3>
+                            <div class="foto-info">
+                                <strong>Información General:</strong><br>
+                                - Fecha: ${foto.fecha_hora}<br>
+                                - Dimensiones: ${foto.ancho}x${foto.alto}<br>
+                                - Total píxeles: ${foto.total_pixeles}<br>
+                                - Matriz: ${foto.matriz_imagen || 'No disponible'}
+                            </div>
+                            <div class="foto-info">
+                                <strong>Objetos Detectados:</strong><br>
+                                - Azul: ${objetos.azul.length} objetos<br>
+                                - Verde: ${objetos.verde.length} objetos<br>
+                                - Rojo: ${objetos.rojo.length} objetos<br>
+                                - Amarillo: ${objetos.amarillo.length} objetos<br>
+                                - Total: ${objetos.azul.length + objetos.verde.length + objetos.rojo.length + objetos.amarillo.length} objetos
+                            </div>
+                        `;
+                        
+                        // Mostrar en un modal o alerta
+                        alert(`Detalles de la Foto:\n\n${detallesHTML.replace(/<br>/g, '\n').replace(/<[^>]*>/g, '')}`);
+                    } else {
+                        alert('Error cargando detalles de la foto');
+                    }
+                })
+                .catch(error => {
+                    alert('Error de conexión al cargar detalles');
+                });
+        }
+
+        // ===== FUNCIONES DE OBJETOS =====
+        function showObjects(color) {
+            currentColor = color;
+            currentObjectsPage = 1;
+            document.getElementById('objects-container').innerHTML = '<div class="loading">Cargando objetos ' + color + '...</div>';
+            
+            fetch(`/get_db_objects/${color}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        allObjects = data.objetos;
+                        displayObjects(allObjects, color);
+                    } else {
+                        document.getElementById('objects-container').innerHTML = `
+                            <div class="empty-state">
+                                <div class="empty-icon">❌</div>
+                                <h3>Error cargando objetos</h3>
+                                <p>${data.error}</p>
+                            </div>
+                        `;
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('objects-container').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-icon">❌</div>
+                            <h3>Error de conexión</h3>
+                            <p>No se pudo conectar al servidor</p>
+                        </div>
+                    `;
+                });
+        }
+
+        function showAllObjects() {
+            currentColor = 'all';
+            currentObjectsPage = 1;
+            document.getElementById('objects-container').innerHTML = '<div class="loading">Cargando todos los objetos...</div>';
+            
+            fetch('/get_db_all_objects')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        allObjects = data.objetos;
+                        displayObjects(allObjects, 'all');
+                    } else {
+                        document.getElementById('objects-container').innerHTML = `
+                            <div class="empty-state">
+                                <div class="empty-icon">❌</div>
+                                <h3>Error cargando objetos</h3>
+                                <p>${data.error}</p>
+                            </div>
+                        `;
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('objects-container').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-icon">❌</div>
+                            <h3>Error de conexión</h3>
+                            <p>No se pudo conectar al servidor</p>
+                        </div>
+                    `;
+                });
+        }
+
+        function displayObjects(objects, color) {
+            if (objects.length === 0) {
+                document.getElementById('objects-container').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">🎯</div>
+                        <h3>No hay objetos ${color !== 'all' ? color : ''} detectados</h3>
+                        <p>No se encontraron objetos con los criterios actuales.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const startIndex = (currentObjectsPage - 1) * itemsPerPage;
+            const paginatedObjects = objects.slice(startIndex, startIndex + itemsPerPage);
+
+            let html = `
+                <div class="foto-info">
+                    <strong>Mostrando ${objects.length} objeto(s) ${color !== 'all' ? 'de color ' + color : 'de todos los colores'}</strong>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Foto ID</th>
+                                <th>Posición (X,Y)</th>
+                                <th>Área</th>
+                                ${color === 'all' ? '<th>Color</th>' : ''}
+                                <th>Fecha Detección</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${paginatedObjects.map(obj => `
+                                <tr>
+                                    <td>${obj.id_objeto || obj.id}</td>
+                                    <td>${obj.id_foto}</td>
+                                    <td>(${obj.x}, ${obj.y})</td>
+                                    <td>${obj.area ? obj.area.toLocaleString() : 'N/A'}</td>
+                                    ${color === 'all' ? `<td><span class="color-badge badge-${obj.color}">${obj.color}</span></td>` : ''}
+                                    <td>${obj.fecha_deteccion || obj.fecha || 'N/A'}</td>
+                                    <td class="actions-cell">
+                                        <button class="btn-db small" onclick="viewObjectDetails(${obj.id_objeto || obj.id}, '${obj.color || color}')">Ver</button>
+                                        <button class="btn-db delete small" onclick="deleteObject(${obj.id_objeto || obj.id}, '${obj.color || color}')">Eliminar</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            
+            document.getElementById('objects-container').innerHTML = html;
+            setupPagination('objects', objects.length, currentObjectsPage, 'objects');
+        }
+
+        function searchObjects() {
+            const searchTerm = document.getElementById('search-objects').value.toLowerCase();
+            const filtered = allObjects.filter(obj => 
+                (obj.id_foto && obj.id_foto.toString().includes(searchTerm)) ||
+                (obj.x && obj.x.toString().includes(searchTerm)) ||
+                (obj.y && obj.y.toString().includes(searchTerm)) ||
+                (obj.area && obj.area.toString().includes(searchTerm))
+            );
+            currentObjectsPage = 1;
+            displayObjects(filtered, currentColor);
+        }
+
+        function filterByArea() {
+            const filter = document.getElementById('filter-area').value;
+            let filtered = allObjects;
+            
+            if (filter === 'small') {
+                filtered = allObjects.filter(obj => obj.area && obj.area < 5000);
+            } else if (filter === 'medium') {
+                filtered = allObjects.filter(obj => obj.area && obj.area >= 5000 && obj.area <= 15000);
+            } else if (filter === 'large') {
+                filtered = allObjects.filter(obj => obj.area && obj.area > 15000);
+            }
+            
+            currentObjectsPage = 1;
+            displayObjects(filtered, currentColor);
+        }
+
+        function viewObjectDetails(objId, color) {
+            fetch(`/get_db_object_details/${color}/${objId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const obj = data.objeto;
+                        alert(`Detalles del Objeto:\n\nID: ${obj.id_objeto}\nColor: ${color}\nFoto ID: ${obj.id_foto}\nPosición: (${obj.x}, ${obj.y})\nÁrea: ${obj.area}\nFecha: ${obj.fecha_deteccion}`);
+                    } else {
+                        alert('Error cargando detalles del objeto');
+                    }
+                })
+                .catch(error => {
+                    alert('Error de conexión al cargar detalles');
+                });
+        }
+
+        function deleteObject(objId, color) {
+            if (confirm(`¿Estás seguro de que quieres eliminar el objeto ${objId} (${color})?\n\nEsta acción no se puede deshacer.`)) {
+                fetch(`/delete_db_object/${color}/${objId}`, { method: 'DELETE' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('Objeto eliminado correctamente');
+                            // Recargar los objetos después de eliminar
+                            if (currentColor === 'all') {
+                                showAllObjects();
+                            } else {
+                                showObjects(currentColor);
+                            }
+                            // Actualizar estadísticas
+                            loadStats();
+                        } else {
+                            alert('Error eliminando objeto: ' + data.error);
+                        }
+                    })
+                    .catch(error => {
+                        alert('Error de conexión al eliminar objeto');
+                    });
+            }
+        }
+
+        // ===== FUNCIONES DE PAGINACIÓN =====
+        function setupPagination(type, totalItems, currentPage, prefix) {
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            const paginationElement = document.getElementById(prefix + '-pagination');
+            
+            if (totalPages <= 1) {
+                paginationElement.innerHTML = '';
+                return;
+            }
+            
+            let html = '';
+            
+            // Botón anterior
+            if (currentPage > 1) {
+                html += `<button class="page-btn" onclick="changePage('${type}', ${currentPage - 1})">Anterior</button>`;
+            }
+            
+            // Páginas
+            for (let i = 1; i <= totalPages; i++) {
+                if (i === currentPage) {
+                    html += `<button class="page-btn active">${i}</button>`;
+                } else {
+                    html += `<button class="page-btn" onclick="changePage('${type}', ${i})">${i}</button>`;
+                }
+            }
+            
+            // Botón siguiente
+            if (currentPage < totalPages) {
+                html += `<button class="page-btn" onclick="changePage('${type}', ${currentPage + 1})">Siguiente</button>`;
+            }
+            
+            paginationElement.innerHTML = html;
+        }
+
+        function changePage(type, newPage) {
+            if (type === 'fotos') {
+                currentFotosPage = newPage;
+                displayFotos(allFotos);
+            } else {
+                currentObjectsPage = newPage;
+                displayObjects(allObjects, currentColor);
+            }
+        }
+
+        function loadAllData() {
+            loadStats();
+            loadFotos();
+            if (currentColor) {
+                if (currentColor === 'all') {
+                    showAllObjects();
+                } else {
+                    showObjects(currentColor);
+                }
+            }
+        }
+
+        function exportToCSV() {
+            alert('Exportando datos a CSV...\n\nEn la implementación real, esto generaría:\n- fotos.csv\n- objetos_azul.csv\n- objetos_verde.csv\n- objetos_rojo.csv\n- objetos_amarillo.csv');
+        }
+
+        setInterval(loadStats, 120000);
+    </script>
+</body>
+</html>
